@@ -1,8 +1,6 @@
 {
   "project_id": "appgprj_6acc728f19d48191b0099e01175183a6",
-  "r2": {
-    "binding": "BUCKET"
-  },
+  "r2": "BUCKET",
   "capabilities": [
     "mcp"
   ]
