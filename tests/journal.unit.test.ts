@@ -1,0 +1,5 @@
+import {test,expect} from '@playwright/test';
+import {grossProfit,netProfit,returnPercent,periodKey,summarize,type TradeRecord} from '../src/lib/journal';
+const record:TradeRecord={id:'a',symbol:'ETHUSDT',side:'long',openedAt:'2026-10-11T14:00:00Z',closedAt:'2026-10-11T16:00:00Z',entry:100,exit:110,quantity:2,leverage:10,fees:2,funding:-1,principal:20,judgment:'',entryReason:'',exitReason:'',strategy:'',followedPlan:true,demo:false};
+test('損益不重複乘槓桿、費用符號與保證金報酬',()=>{expect(grossProfit(record)).toBe(20);expect(netProfit(record)).toBe(17);expect(returnPercent(record)).toBe(85);expect(returnPercent({...record,principal:undefined})).toBeNull();expect(netProfit({...record,side:'short'})).toBe(-23);});
+test('台北跨週/月與統計虧損分母',()=>{expect(periodKey(record.closedAt,'week')).toBe('2026-10-12');expect(periodKey('2026-09-30T16:00:00Z','month')).toBe('2026-10');const stats=summarize([record,{...record,id:'b',side:'short',followedPlan:false}]);expect(stats.net).toBe(-6);expect(stats.winRate).toBe(50);expect(stats.discipline).toBe(50);expect(stats.profitFactor).toBeCloseTo(17/23);});
