@@ -32,13 +32,13 @@ TenantConfig 保存品牌、語言、時區與 `managed-rental` / `license-sale`
 
 ### 掃描範圍與演算法
 
-全市場定義為 Binance 所有有效、正在交易的 USDT 永續合約，不含現貨、USDC 或其他交易所。以交易所伺服器時間作截點，僅使用已收盤的 15 分鐘 K 線。每商品至少 250 根；MA20/60/120 為 SMA，EMA20/60/120/200 使用 SMA 初始化；量比為最近已收盤量除以前 20 根均量。嚴格、順勢及回踩的確切規則見 scanner.ts 和掃描器說明。新上市資料不足或 API 失敗會計入失敗數；不會退回示範假裝成功。候選不代表獲利預測。
+全市場定義為所選 OKX 或 Binance 所有有效、正在交易的 USDT 永續合約，不含現貨、USDC 或其他交易所。以交易所伺服器時間作截點，僅使用已收盤的 15 分鐘 K 線。OKX K 線依確認旗標與交易所時間排除未收盤後由新到舊轉為時間正序；每商品至少 250 根；MA20/60/120 為 SMA，EMA20/60/120/200 使用有限歷史的 SMA 初始化，數值可能與 TradingView 完整歷史有差異；量比為最近已收盤量除以前 20 根均量。嚴格、順勢及回踩的確切規則見 scanner.ts 和掃描器說明。新上市資料不足或 API 失敗會計入失敗數；不會退回示範假裝成功。候選不代表獲利預測。
 
 `POST /api/scan/begin` 動態取得商品及時間，`POST /api/scan/step` 每次 8 商品，`GET /api/scan/status` 可讀取最後完成快照。以 runId/offset 避免重複步驟；R2 不是原子鎖，排程與瀏覽器應保持單一驅動，遇既有 running run 應讀取/等待，不能同時重開。頁面可見時每 15 分鐘刷新與雲端無人排程為不同功能，不能互相代稱。
 
 ### TradingView
 
-使用官方 advanced-chart embed，不需交易所金鑰；商品映射 Binance USDT 永續 `.P`、NASDAQ、TWSE。外連支援商品與週期。完整掃描均線由本站計算，圖表內建 MA/EMA 為 TradingView 預設值，指定週期要於圖表手動設定。圖表服務可能受地區/延遲/瀏覽器限制，失敗提供重試與外連，不顯示假圖冒充行情。
+使用官方 advanced-chart embed，不需交易所金鑰；商品映射 OKX / Binance USDT 永續 `.P`、NASDAQ、TWSE。外連支援商品與週期。完整掃描均線由本站計算，圖表內建 MA/EMA 為 TradingView 預設值，指定週期要於圖表手動設定。圖表服務可能受地區/延遲/瀏覽器限制，失敗提供重試與外連，不顯示假圖冒充行情。
 
 ### 個人交易紀錄
 
@@ -51,3 +51,7 @@ TenantConfig 保存品牌、語言、時區與 `managed-rental` / `license-sale`
 Worker `/mcp` 提供 `scan_status`、`scan_begin`、`scan_step`，供 Sites 已授權私人連線使用。無人排程需驗證 writer 將結果寫入 R2，且後續 task 能獨立取得相同 Site 的存取；未驗證前不能宣稱 15 分鐘背景更新已啟用。寫入不重新發布網站，所有錯誤與覆蓋保存在 scan run。
 
 本機因沒有 R2，live API 會明示 503；Worker 單元測試使用公開 API fixture，瀏覽器 TradingView 載入測試使用 fixture，這些不是生產行情驗證。
+
+### 來源可用性
+
+2026/10/12 已透過原生 Site 工具證實私人 R2 存取成功；Binance 公開 API 從託管伺服器返回 HTTP403，因此加入 OKX 公開來源作明示可選的獨立交易所，不作隱性代理或錯誤回落。最終成功覆蓋數與候選依最新實際掃描狀態為準。

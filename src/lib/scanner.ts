@@ -1,7 +1,8 @@
+export type DataProvider = 'okx' | 'binance';
 export type Candle = { time:number; close:number; volume:number };
 export type ScanRules = { preset:'strict'|'trend'|'pullback'; direction:'both'|'long'|'short'; ma:boolean; ema:boolean; slope:boolean; volumeRatio:number };
 export type Indicators = { ma20:number; ma60:number; ma120:number; ema20:number; ema60:number; ema120:number; ema200:number; volumeRatio:number; price:number; previous:Record<string,number> };
-export type ScanResult = { symbol:string; side:'long'|'short'; indicators:Indicators; time:number; demo?:boolean };
+export type ScanResult = { symbol:string; side:'long'|'short'; indicators:Indicators; time:number; demo?:boolean; provider?:DataProvider; tradingViewSymbol?:string };
 export const defaultRules:ScanRules={preset:'strict',direction:'both',ma:true,ema:true,slope:true,volumeRatio:1.2};
 const sma=(values:number[],period:number)=>values.slice(-period).reduce((a,b)=>a+b,0)/period;
 const ema=(values:number[],period:number)=>{let value=sma(values.slice(0,period),period);const alpha=2/(period+1);for(let i=period;i<values.length;i++)value=values[i]*alpha+value*(1-alpha);return value;};
@@ -31,7 +32,7 @@ export function evaluateCandles(symbol:string,candles:Candle[],rules:ScanRules):
   return {symbol,side,indicators,time:candles.at(-1)!.time};
  }return null;
 }
-export type ScanProgress={total:number;completed:number;failed:number;results:ScanResult[]};
+export type ScanProgress={total:number;completed:number;failed:number;results:ScanResult[]; provider?:DataProvider; updatedAt?:string};
 async function request(path:string,signal:AbortSignal){for(let attempt=0;attempt<3;attempt++){const response=await fetch(`https://fapi.binance.com${path}`,{signal});if(response.status===429){if(attempt===2)throw new Error('API 速率限制 (429)');await new Promise<void>((resolve,reject)=>{const timer=setTimeout(resolve,2000*(attempt+1));signal.addEventListener('abort',()=>{clearTimeout(timer);reject(new DOMException('Aborted','AbortError'));},{once:true});});continue;}if(!response.ok)throw new Error(`Binance HTTP ${response.status}`);return response.json();}throw new Error('API 速率限制');}
 export async function scanMarketDirect(rules:ScanRules,signal:AbortSignal,onProgress:(p:ScanProgress)=>void):Promise<ScanProgress>{
  const info=await request('/fapi/v1/exchangeInfo',signal);
@@ -43,10 +44,10 @@ export async function scanMarketDirect(rules:ScanRules,signal:AbortSignal,onProg
 }
 export function demoResults(rules:ScanRules):ScanResult[]{return ['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT','XRPUSDT','DOGEUSDT','AVAXUSDT','LINKUSDT'].flatMap((symbol,n)=>{const candles=Array.from({length:300},(_,k)=>({time:Date.UTC(2026,9,12)-((300-k)*900000),close:(n%2?400:100)+(n%2?-1:1)*k*.2+Math.sin(k/7)*.03,volume:k===299?160:100}));const match=evaluateCandles(symbol,candles,rules);return match?[{...match,demo:true}]:[];});}
 
-export async function scanMarket(rules:ScanRules,signal:AbortSignal,onProgress:(p:ScanProgress)=>void):Promise<ScanProgress>{
- const api=async(action:string,body:unknown)=>{const response=await fetch(`/api/scan/${action}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal});const payload=await response.json();if(response.status===409&&action==='begin'&&payload.progress){if(JSON.stringify(payload.progress.rules)===JSON.stringify(rules))return payload.progress;throw new Error('已有不同條件的掃描正在進行，請稍後重試或讀取最新快照。');}if(!response.ok)throw new Error(payload.error||`掃描 API HTTP ${response.status}`);return payload;};
- let run=await api('begin',{rules});
+export async function scanMarket(rules:ScanRules,signal:AbortSignal,onProgress:(p:ScanProgress)=>void,provider:DataProvider='okx'):Promise<ScanProgress>{
+ const api=async(action:string,body:unknown)=>{const response=await fetch(`/api/scan/${action}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal});const payload=await response.json();if(response.status===409&&action==='begin'&&payload.progress){if(JSON.stringify(payload.progress.rules)===JSON.stringify(rules)&&(payload.progress.provider||'binance')===provider)return payload.progress;throw new Error('已有不同條件的掃描正在進行，請稍後重試或讀取最新快照。');}if(!response.ok)throw new Error(payload.error||`掃描 API HTTP ${response.status}`);return payload;};
+ let run=await api('begin',{rules,provider});
  // Server APIs may wrap a run; normalize to the documented run structure.
  run=run.run||run.progress||run;
- while(true){signal.throwIfAborted();onProgress({total:run.total,completed:run.completed,failed:run.failed,results:run.results||[]});if(run.status==='completed'||run.status==='complete'||(run.total>0&&run.completed>=run.total))return {total:run.total,completed:run.completed,failed:run.failed,results:run.results||[]};if(run.status==='failed')throw new Error(run.error||'伺服器掃描失敗');const next=await api('step',{runId:run.runId,offset:run.offset});run=next.run||next.progress||next;}
+ while(true){signal.throwIfAborted();onProgress({total:run.total,completed:run.completed,failed:run.failed,results:run.results||[],provider:run.provider,updatedAt:run.updatedAt});if(run.status==='completed'||run.status==='complete'||(run.total>0&&run.completed>=run.total))return {total:run.total,completed:run.completed,failed:run.failed,results:run.results||[],provider:run.provider,updatedAt:run.updatedAt};if(run.status==='failed')throw new Error(run.error||'伺服器掃描失敗');const next=await api('step',{runId:run.runId,offset:run.offset});run=next.run||next.progress||next;}
 }
