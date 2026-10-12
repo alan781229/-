@@ -32,7 +32,7 @@ export function evaluateCandles(symbol:string,candles:Candle[],rules:ScanRules):
   return {symbol,side,indicators,time:candles.at(-1)!.time};
  }return null;
 }
-export type ScanProgress={total:number;completed:number;failed:number;results:ScanResult[]; provider?:DataProvider; updatedAt?:string};
+export type ScanProgress={total:number;completed:number;failed:number;results:ScanResult[]; provider?:DataProvider; updatedAt?:string; phase?:string; retryRounds?:number};
 async function request(path:string,signal:AbortSignal){for(let attempt=0;attempt<3;attempt++){const response=await fetch(`https://fapi.binance.com${path}`,{signal});if(response.status===429){if(attempt===2)throw new Error('API 速率限制 (429)');await new Promise<void>((resolve,reject)=>{const timer=setTimeout(resolve,2000*(attempt+1));signal.addEventListener('abort',()=>{clearTimeout(timer);reject(new DOMException('Aborted','AbortError'));},{once:true});});continue;}if(!response.ok)throw new Error(`Binance HTTP ${response.status}`);return response.json();}throw new Error('API 速率限制');}
 export async function scanMarketDirect(rules:ScanRules,signal:AbortSignal,onProgress:(p:ScanProgress)=>void):Promise<ScanProgress>{
  const info=await request('/fapi/v1/exchangeInfo',signal);
@@ -49,5 +49,5 @@ export async function scanMarket(rules:ScanRules,signal:AbortSignal,onProgress:(
  let run=await api('begin',{rules,provider});
  // Server APIs may wrap a run; normalize to the documented run structure.
  run=run.run||run.progress||run;
- while(true){signal.throwIfAborted();onProgress({total:run.total,completed:run.completed,failed:run.failed,results:run.results||[],provider:run.provider,updatedAt:run.updatedAt});if(run.status==='completed'||run.status==='complete'||(run.total>0&&run.completed>=run.total))return {total:run.total,completed:run.completed,failed:run.failed,results:run.results||[],provider:run.provider,updatedAt:run.updatedAt};if(run.status==='failed')throw new Error(run.error||'伺服器掃描失敗');const next=await api('step',{runId:run.runId,offset:run.offset});run=next.run||next.progress||next;}
+ while(true){signal.throwIfAborted();onProgress({total:run.total,completed:run.completed,failed:run.failed,results:run.results||[],provider:run.provider,updatedAt:run.updatedAt,phase:run.phase,retryRounds:run.retryRounds});if(run.status==='completed'||run.status==='complete'||(run.total>0&&run.completed>=run.total))return {total:run.total,completed:run.completed,failed:run.failed,results:run.results||[],provider:run.provider,updatedAt:run.updatedAt,phase:run.phase,retryRounds:run.retryRounds};if(run.status==='failed')throw new Error(run.error||'伺服器掃描失敗');const next=await api('step',{runId:run.runId,offset:run.offset});run=next.run||next.progress||next;}
 }

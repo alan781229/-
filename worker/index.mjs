@@ -3,7 +3,22 @@ const VERSION='tide-worker-3';
 const json=(data,status=200)=>new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store'}});
 const read=async(bucket,key)=>{const object=await bucket.get(key);return object?object.json():null;};
 const write=(bucket,key,value)=>bucket.put(key,JSON.stringify(value),{httpMetadata:{contentType:'application/json'}});
-async function remote(path,provider='binance'){const response=await fetch(`${provider==='okx'?'https://www.okx.com':'https://fapi.binance.com'}${path}`,{signal:AbortSignal.timeout(12000)});if(!response.ok)throw Error(`${provider==='okx'?'OKX':'Binance'} HTTP ${response.status}`);const data=await response.json();if(provider==='okx'&&(data.code!=='0'||!Array.isArray(data.data)))throw Error(`OKX ${data.code}: ${data.msg||'回應格式無效'}`);return data;}
+const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+async function remote(path,provider='binance'){
+ const label=provider==='okx'?'OKX':'Binance';
+ for(let attempt=0;attempt<3;attempt++){
+  const response=await fetch(`${provider==='okx'?'https://www.okx.com':'https://fapi.binance.com'}${path}`,{signal:AbortSignal.timeout(12000)});
+  if(response.status===429&&attempt<2){const retry=Number(response.headers.get('retry-after'));await pause(Math.max(3000*(attempt+1),Number.isFinite(retry)?Math.min(30000,retry*1000):0));continue;}
+  if(!response.ok)throw Error(`${label} HTTP ${response.status}`);
+  const data=await response.json();
+  if(provider==='okx'&&data.code==='50011'&&attempt<2){await pause(3000*(attempt+1));continue;}
+  if(provider==='okx'&&(data.code!=='0'||!Array.isArray(data.data)))throw Error(`OKX ${data.code}: ${data.msg||'回應格式無效'}`);
+  return data;
+ }
+ throw Error(`${label} 限流重試次數已達上限`);
+}
+async function limitedMap(items,fn){const output=new Array(items.length);let index=0;await Promise.all(Array.from({length:Math.min(2,items.length)},async()=>{while(index<items.length){const current=index++;output[current]=await fn(items[current]);}}));return output;}
+
 function rulesFrom(value={}){const rules={...defaultRules,...value};if(!['strict','trend','pullback'].includes(rules.preset)||!['both','long','short'].includes(rules.direction)||!['ma','ema','slope'].every(k=>typeof rules[k]==='boolean')||!Number.isFinite(rules.volumeRatio)||rules.volumeRatio<0||rules.volumeRatio>20||(!rules.ma&&!rules.ema))throw Error('篩選條件無效');return rules;}
 export async function api(request,env){const path=new URL(request.url).pathname;if(path==='/api/health')return json({ok:true,storage:Boolean(env.BUCKET),version:VERSION});if(!path.startsWith('/api/scan/'))return json({error:'找不到 API'},404);if(!env.BUCKET)return json({error:'尚未綁定持久儲存 BUCKET'},503);if(request.method!=='GET'&&request.headers.get('origin')&&request.headers.get('origin')!==new URL(request.url).origin)return json({error:'來源不符'},403);
  const bucket=env.BUCKET;try{
@@ -24,13 +39,20 @@ export async function api(request,env){const path=new URL(request.url).pathname;
  }
  if(path==='/api/scan/step'){
  const run=await read(bucket,'scan/progress.json');if(!run||run.runId!==body.runId||run.offset!==body.offset||run.status!=='running')return json({error:'掃描版本或位置已變更',progress:run},409);
- const batch=run.symbols.slice(run.offset,run.offset+8);
- const outcomes=await Promise.all(batch.map(async symbol=>{try{const provider=run.provider||'binance';let candles;
+ const batch=(run.workSymbols||run.symbols).slice(run.offset,run.offset+8);
+ await pause(2200); // Keep at most ~4 market requests/sec across serial scan steps.
+ const outcomes=await limitedMap(batch,async symbol=>{try{const provider=run.provider||'binance';let candles;
  if(provider==='okx'){const response=await remote(`/api/v5/market/candles?instId=${encodeURIComponent(run.instrumentMap[symbol])}&bar=15m&limit=300`,'okx');candles=response.data.filter(row=>String(row[8])==='1'&&Number(row[0])+900000<=run.exchangeTime).map(row=>({time:Number(row[0]),close:Number(row[4]),volume:Number(row[5])})).sort((a,b)=>a.time-b.time);}
  else{const raw=await remote(`/fapi/v1/klines?symbol=${encodeURIComponent(symbol)}&interval=15m&limit=301`);if(!Array.isArray(raw))throw Error('K 線格式無效');candles=raw.filter(row=>Number(row[6])<run.exchangeTime).map(row=>({time:Number(row[0]),close:Number(row[4]),volume:Number(row[5])}));}
- if(candles.some(c=>!Number.isFinite(c.time)||!Number.isFinite(c.close)||c.close<=0||!Number.isFinite(c.volume)||c.volume<0))throw Error('K 線數值無效');const result=evaluateCandles(symbol,candles,run.rules);return {result:result?{...result,provider,tradingViewSymbol:`${provider==='okx'?'OKX':'BINANCE'}:${symbol}.P`}:null};}catch(error){return {error:{symbol,message:String(error.message||error)}};} }));
+ if(candles.some(c=>!Number.isFinite(c.time)||!Number.isFinite(c.close)||c.close<=0||!Number.isFinite(c.volume)||c.volume<0))throw Error('K 線數值無效');const result=evaluateCandles(symbol,candles,run.rules);return {result:result?{...result,provider,tradingViewSymbol:`${provider==='okx'?'OKX':'BINANCE'}:${symbol}.P`}:null};}catch(error){return {error:{symbol,message:String(error.message||error)}};} });
  const latest=await read(bucket,'scan/progress.json');if(latest?.runId!==run.runId||latest.offset!==run.offset)return json({error:'掃描位置已由其他請求更新'},409);
- for(const outcome of outcomes){if(outcome.error){run.failed++;run.errors.push(outcome.error);}else if(outcome.result)run.results.push(outcome.result);}run.completed+=batch.length;run.offset=run.completed;run.updatedAt=new Date().toISOString();if(run.completed===run.total){run.status=run.failed===run.total?'failed':'completed';if(run.status==='completed')await write(bucket,'scan/snapshot.json',run);}await write(bucket,'scan/progress.json',run);return json(run);
+ for(const outcome of outcomes){if(outcome.error){run.failed++;run.errors.push(outcome.error);}else if(outcome.result)run.results.push(outcome.result);}run.completed+=batch.length;run.offset+=batch.length;run.updatedAt=new Date().toISOString();
+ if(run.completed===run.total){
+  const temporary=run.errors.filter(error=>/HTTP (429|5\d\d)|50011|timeout|timed out|fetch failed/i.test(error.message));
+  if(temporary.length&&(run.retryRounds||0)<2){
+   const symbols=new Set(temporary.map(error=>error.symbol));run.workSymbols=[...symbols];run.errors=run.errors.filter(error=>!symbols.has(error.symbol));run.completed=run.total-run.workSymbols.length;run.failed=run.errors.length;run.offset=0;run.retryRounds=(run.retryRounds||0)+1;run.phase='retry';
+  }else{run.status=run.failed===run.total?'failed':'completed';run.phase='done';if(run.status==='completed')await write(bucket,'scan/snapshot.json',run);}
+ }await write(bucket,'scan/progress.json',run);return json(run);
  }return json({error:'找不到 API'},404);
  }catch(error){return json({error:String(error.message||error)},502);}}
 export default {async fetch(request,env){if(new URL(request.url).pathname==='/mcp')return mcp(request,env);if(new URL(request.url).pathname.startsWith('/api/'))return api(request,env);return serveAsset(request);}};
