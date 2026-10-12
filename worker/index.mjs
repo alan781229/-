@@ -9,7 +9,7 @@ async function remote(path,provider='binance'){
  for(let attempt=0;attempt<3;attempt++){
   const response=await fetch(`${provider==='okx'?'https://www.okx.com':'https://fapi.binance.com'}${path}`,{signal:AbortSignal.timeout(12000)});
   if(response.status===429&&attempt<2){const retry=Number(response.headers.get('retry-after'));await pause(Math.max(3000*(attempt+1),Number.isFinite(retry)?Math.min(30000,retry*1000):0));continue;}
-  if(!response.ok)throw Error(`${label} HTTP ${response.status}`);
+  if(!response.ok){const reason=(await response.text()).slice(0,160).replace(/\s+/g,' ');throw Error(`${label} HTTP ${response.status}${reason?' · '+reason:''}`);}
   const data=await response.json();
   if(provider==='okx'&&data.code==='50011'&&attempt<2){await pause(3000*(attempt+1));continue;}
   if(provider==='okx'&&(data.code!=='0'||!Array.isArray(data.data)))throw Error(`OKX ${data.code}: ${data.msg||'回應格式無效'}`);
@@ -17,7 +17,7 @@ async function remote(path,provider='binance'){
  }
  throw Error(`${label} 限流重試次數已達上限`);
 }
-async function limitedMap(items,fn){const output=new Array(items.length);let index=0;await Promise.all(Array.from({length:Math.min(2,items.length)},async()=>{while(index<items.length){const current=index++;output[current]=await fn(items[current]);}}));return output;}
+async function limitedMap(items,fn){const output=new Array(items.length);let index=0;await Promise.all(Array.from({length:Math.min(4,items.length)},async()=>{while(index<items.length){const current=index++;output[current]=await fn(items[current]);}}));return output;}
 
 function rulesFrom(value={}){const rules={...defaultRules,...value};if(!['strict','trend','pullback'].includes(rules.preset)||!['both','long','short'].includes(rules.direction)||!['ma','ema','slope'].every(k=>typeof rules[k]==='boolean')||!Number.isFinite(rules.volumeRatio)||rules.volumeRatio<0||rules.volumeRatio>20||(!rules.ma&&!rules.ema))throw Error('篩選條件無效');return rules;}
 export async function api(request,env){const path=new URL(request.url).pathname;if(path==='/api/health')return json({ok:true,storage:Boolean(env.BUCKET),version:VERSION});if(!path.startsWith('/api/scan/'))return json({error:'找不到 API'},404);if(!env.BUCKET)return json({error:'尚未綁定持久儲存 BUCKET'},503);if(request.method!=='GET'&&request.headers.get('origin')&&request.headers.get('origin')!==new URL(request.url).origin)return json({error:'來源不符'},403);
@@ -39,8 +39,8 @@ export async function api(request,env){const path=new URL(request.url).pathname;
  }
  if(path==='/api/scan/step'){
  const run=await read(bucket,'scan/progress.json');if(!run||run.runId!==body.runId||run.offset!==body.offset||run.status!=='running')return json({error:'掃描版本或位置已變更',progress:run},409);
- const batch=(run.workSymbols||run.symbols).slice(run.offset,run.offset+8);
- await pause(2200); // Keep at most ~4 market requests/sec across serial scan steps.
+ const batch=(run.workSymbols||run.symbols).slice(run.offset,run.offset+12);
+ await pause(2200); // Keep at most ~6 market requests/sec across serial scan steps.
  const outcomes=await limitedMap(batch,async symbol=>{try{const provider=run.provider||'binance';let candles;
  if(provider==='okx'){const response=await remote(`/api/v5/market/candles?instId=${encodeURIComponent(run.instrumentMap[symbol])}&bar=15m&limit=300`,'okx');candles=response.data.filter(row=>String(row[8])==='1'&&Number(row[0])+900000<=run.exchangeTime).map(row=>({time:Number(row[0]),close:Number(row[4]),volume:Number(row[5])})).sort((a,b)=>a.time-b.time);}
  else{const raw=await remote(`/fapi/v1/klines?symbol=${encodeURIComponent(symbol)}&interval=15m&limit=301`);if(!Array.isArray(raw))throw Error('K 線格式無效');candles=raw.filter(row=>Number(row[6])<run.exchangeTime).map(row=>({time:Number(row[0]),close:Number(row[4]),volume:Number(row[5])}));}
@@ -61,7 +61,7 @@ function serveAsset(request){const path=decodeURIComponent(new URL(request.url).
 const mcpTools=[
  {name:'scan_status',description:'Read the persisted scan coverage, latest snapshot and current progress.',inputSchema:{type:'object',properties:{},additionalProperties:false}},
  {name:'scan_begin',description:'Begin a complete OKX or Binance USDT perpetual scan using closed 15-minute candles and default MA/EMA/volume rules. Owner-private Site only.',inputSchema:{type:'object',properties:{provider:{type:'string',enum:['okx','binance'],default:'okx'}},additionalProperties:false}},
- {name:'scan_step',description:'Process the next eight symbols of a running full-market scan. Use the returned runId and offset until terminal.',inputSchema:{type:'object',properties:{runId:{type:'string'},offset:{type:'integer',minimum:0}},required:['runId','offset'],additionalProperties:false}}
+ {name:'scan_step',description:'Process the next twelve symbols of a running full-market scan. Use the returned runId and offset until terminal.',inputSchema:{type:'object',properties:{runId:{type:'string'},offset:{type:'integer',minimum:0}},required:['runId','offset'],additionalProperties:false}}
 ];
 async function mcp(request,env){
  if(request.method!=='POST')return json({error:'POST required'},405);
