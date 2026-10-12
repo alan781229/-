@@ -10,3 +10,11 @@
 6. 常態成功保持安靜；只在來源失敗、寫入失敗或需要使用者處理時通知。同一次持續錯誤不重複通知。這不是交易/下單服務。
 
 服務憑證不能寫入原始碼、備份、排程 prompt 或回應。Sites 的 service access 只送到相同 Site；驗證存取獨立於原始碼權限。若只提供瀏覽器刷新，必須標示未啟用無人排程。
+
+## GitHub 15 分鐘排程
+
+Sites create_schedule 已實際回報最低每小時一次，拒絕 15 分鐘。沒有建立每小時的替代排程。
+
+`.github/workflows/market-scan.yml` 使用公開儲存庫的 GitHub-hosted Linux runner，每 15 分鐘觸發（UTC 分鐘 0/15/30/45，對應台北同分鐘），也支援 workflow_dispatch。GitHub 排程是 best effort，可能延遲；完整掃描仍受公開來源限流影響。concurrency 不重疊，已有新鮮 driver 時跳過，失敗進度保留。首次服務存取須另驗證，原生 Site MCP 的成功不能冒充 GitHub 服務連線成功。
+
+啟用所需：在儲存庫 Actions secrets 設定 `TIDE_SITE_SERVICE_TOKEN` 為**同一私人 Site 的服務存取 token**，不是交易所 API key，也不是來源儲存庫 Git token。不要把值放入程式、workflow input、排程 prompt 或版本控制。沒有此 secret 時工作流程僅顯示未配置並跳過掃描；不能宣稱背景更新已啟用。現有工具沒有提供 GitHub secrets 設定操作，需使用者完成安全配置後再驗證第一次執行。

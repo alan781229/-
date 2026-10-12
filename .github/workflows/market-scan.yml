@@ -1,0 +1,32 @@
+name: Refresh private market scanner
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '*/15 * * * *'
+permissions:
+  contents: read
+concurrency:
+  group: tide-private-market-scan
+  cancel-in-progress: false
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      TIDE_SITE_SERVICE_TOKEN: ${{ secrets.TIDE_SITE_SERVICE_TOKEN }}
+    steps:
+      - name: Check private Site credential
+        id: access
+        shell: bash
+        run: |
+          if [ -z "$TIDE_SITE_SERVICE_TOKEN" ]; then
+            echo 'configured=false' >> "$GITHUB_OUTPUT"
+            echo '::notice::Background scanning is not active. Configure TIDE_SITE_SERVICE_TOKEN in repository Actions secrets.'
+          else
+            echo 'configured=true' >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v4
+        if: steps.access.outputs.configured == 'true'
+      - name: Update full-market snapshot
+        if: steps.access.outputs.configured == 'true'
+        run: python scripts/run-market-scan.py
