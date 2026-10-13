@@ -67,3 +67,10 @@ Worker `/mcp` 提供 `scan_status`、`scan_begin`、`scan_step`，供 Sites 已�
 原生工具完成同一 OKX run 並回讀：485 個全部完成處理，成功 458，27 個仍 HTTP429；21 個符合當時嚴格條件的候選。包含兩輪補掃，快照與進度 runId 相同。這是完整嘗試、非 100% 成功覆蓋；候選及行情時間依最新快照為準。
 
 Sites 實際拒絕 15 分鐘排程（最多每小時）；沒有擅自改每小時。GitHub Actions 15 分鐘流程已準備，未配置本站服務 token 就跳過，不將此狀態標示為背景更新已啟用。
+
+## Integrated exploration and screenshot OCR
+The overview now hosts the persistent scanner/chart switch; standalone scanner/chart/calendar navigation was removed. Real scan candidates are scored and displayed as independent long/short top-five groups. Raw scan snapshots retain full coverage and candidates for audit. Optional technical conditions use a registry and multi-select AND semantics, including MACD/RSI, averages, engulfing, volume, confirmed-pivot neckline patterns and RSI divergence. Pattern detections are rule approximations, documented in the interface; they are not model predictions. The cross-market screener remains explicitly demo-only and applies the same calculations to synthetic 300-bar OHLC histories.
+
+Trade screenshots can be pasted into the journal and processed with Tesseract.js locally. The first OCR use downloads worker/WASM and English/Traditional Chinese language assets; screenshot pixels are not sent to an OCR service. Explicitly labeled recognized fields are previewed for review before applying to the editable form. Missing margin is not inferred from screenshot ROI. Original screenshot net/ROI are review-only; saved profit uses trade prices, quantity and signed fees/funding.
+
+Weekly focus uses shared demo calendar records in a pausable marquee with a reduced-motion alternative; a native dialog provides all-event browsing and existing filters/favorites.

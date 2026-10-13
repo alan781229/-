@@ -32,8 +32,8 @@ export function CapitalPanel() {
   </section>;
 }
 
-type EventItem = { id: string; day: number; hour: number; title: string; region: "美國" | "台灣" | "全球"; importance: "高" | "中"; previous: string; expected: string; detail: string };
-const events: EventItem[] = [
+export type EventItem = { id: string; day: number; hour: number; title: string; region: "美國" | "台灣" | "全球"; importance: "高" | "中"; previous: string; expected: string; detail: string };
+export const events: EventItem[] = [
   { id: "cpi", day: 1, hour: 20, title: "美國消費者物價指數 CPI", region: "美國", importance: "高", previous: "2.8%", expected: "2.7%", detail: "觀察通膨變化與利率預期，可能影響美元、債券及風險資產。數值與排程均為示範。" },
   { id: "twtrade", day: 2, hour: 16, title: "台灣進出口統計", region: "台灣", importance: "中", previous: "+8.2%", expected: "+9.1%", detail: "觀察出口需求與電子產業景氣，搭配產業營收追蹤。數值與排程均為示範。" },
   { id: "fed", day: 3, hour: 2, title: "聯準會利率決策", region: "美國", importance: "高", previous: "4.00%", expected: "4.00%", detail: "留意政策聲明與利率路徑；此模擬事件不代表官方會議時間。" },
@@ -41,15 +41,15 @@ const events: EventItem[] = [
   { id: "jobs", day: 4, hour: 20, title: "美國非農就業報告", region: "美國", importance: "高", previous: "15.1 萬", expected: "16.0 萬", detail: "就業增長與薪資變化有助評估景氣及政策方向。數值與排程均為示範。" },
 ];
 const FAVORITES_KEY = "financial-research-demo-events-v1";
-const dateFormat = new Intl.DateTimeFormat("zh-TW", { timeZone: "Asia/Taipei", month: "2-digit", day: "2-digit" });
-const timeFormat = new Intl.DateTimeFormat("zh-TW", { timeZone: "Asia/Taipei", hour: "2-digit", minute: "2-digit", hour12: false });
-function eventDate(week: number, day: number, hour = 0) { return new Date(Date.UTC(2026, 9, 12 + week * 7 + day, hour - 8)); }
+export const dateFormat = new Intl.DateTimeFormat("zh-TW", { timeZone: "Asia/Taipei", month: "2-digit", day: "2-digit" });
+export const timeFormat = new Intl.DateTimeFormat("zh-TW", { timeZone: "Asia/Taipei", hour: "2-digit", minute: "2-digit", hour12: false });
+export function eventDate(week: number, day: number, hour = 0) { return new Date(Date.UTC(2026, 9, 12 + week * 7 + day, hour - 8)); }
 
-export function CalendarPanel() {
+export function CalendarPanel({ initialEventId }: { initialEventId?: string } = {}) {
   const [week, setWeek] = useState(0);
   const [region, setRegion] = useState("全部地區");
   const [importance, setImportance] = useState("全部重要性");
-  const [expanded, setExpanded] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<string | null>(initialEventId ? `0:${initialEventId}` : null);
   const [favorites, setFavorites] = useState<string[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [savedOnly, setSavedOnly] = useState(false);

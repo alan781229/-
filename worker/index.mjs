@@ -1,4 +1,4 @@
-import {evaluateCandles,defaultRules} from '../src/lib/scanner.ts';
+import {evaluateCandles,defaultRules,technicalConditionOptions} from '../src/lib/scanner.ts';
 const VERSION='tide-worker-3';
 const json=(data,status=200)=>new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store'}});
 const read=async(bucket,key)=>{const object=await bucket.get(key);return object?object.json():null;};
@@ -19,7 +19,7 @@ async function remote(path,provider='binance'){
 }
 async function limitedMap(items,fn){const output=new Array(items.length);let index=0;await Promise.all(Array.from({length:Math.min(4,items.length)},async()=>{while(index<items.length){const current=index++;output[current]=await fn(items[current]);}}));return output;}
 
-function rulesFrom(value={}){const rules={...defaultRules,...value};if(!['strict','trend','pullback'].includes(rules.preset)||!['both','long','short'].includes(rules.direction)||!['ma','ema','slope'].every(k=>typeof rules[k]==='boolean')||!Number.isFinite(rules.volumeRatio)||rules.volumeRatio<0||rules.volumeRatio>20||(!rules.ma&&!rules.ema))throw Error('篩選條件無效');return rules;}
+function rulesFrom(value={}){const rules={...defaultRules,...value};if(!['strict','trend','pullback'].includes(rules.preset)||!['both','long','short'].includes(rules.direction)||!['ma','ema','slope'].every(k=>typeof rules[k]==='boolean')||!Number.isFinite(rules.volumeRatio)||rules.volumeRatio<0||rules.volumeRatio>20||(!rules.ma&&!rules.ema))throw Error('篩選條件無效');if(rules.conditions!==undefined&&(!Array.isArray(rules.conditions)||rules.conditions.length>technicalConditionOptions.length||rules.conditions.some(id=>!technicalConditionOptions.some(option=>option.id===id))))throw Error('技術條件無效');return rules;}
 export async function api(request,env){const path=new URL(request.url).pathname;if(path==='/api/health')return json({ok:true,storage:Boolean(env.BUCKET),version:VERSION});if(!path.startsWith('/api/scan/'))return json({error:'找不到 API'},404);if(!env.BUCKET)return json({error:'尚未綁定持久儲存 BUCKET'},503);if(request.method!=='GET'&&request.headers.get('origin')&&request.headers.get('origin')!==new URL(request.url).origin)return json({error:'來源不符'},403);
  const bucket=env.BUCKET;try{
  if(path==='/api/scan/status'&&request.method==='GET')return json({progress:await read(bucket,'scan/progress.json'),snapshot:await read(bucket,'scan/snapshot.json'),singleWriter:true});
@@ -42,8 +42,8 @@ export async function api(request,env){const path=new URL(request.url).pathname;
  const batch=(run.workSymbols||run.symbols).slice(run.offset,run.offset+12);
  await pause(2200); // Keep at most ~6 market requests/sec across serial scan steps.
  const outcomes=await limitedMap(batch,async symbol=>{try{const provider=run.provider||'binance';let candles;
- if(provider==='okx'){const response=await remote(`/api/v5/market/candles?instId=${encodeURIComponent(run.instrumentMap[symbol])}&bar=15m&limit=300`,'okx');candles=response.data.filter(row=>String(row[8])==='1'&&Number(row[0])+900000<=run.exchangeTime).map(row=>({time:Number(row[0]),close:Number(row[4]),volume:Number(row[5])})).sort((a,b)=>a.time-b.time);}
- else{const raw=await remote(`/fapi/v1/klines?symbol=${encodeURIComponent(symbol)}&interval=15m&limit=301`);if(!Array.isArray(raw))throw Error('K 線格式無效');candles=raw.filter(row=>Number(row[6])<run.exchangeTime).map(row=>({time:Number(row[0]),close:Number(row[4]),volume:Number(row[5])}));}
+ if(provider==='okx'){const response=await remote(`/api/v5/market/candles?instId=${encodeURIComponent(run.instrumentMap[symbol])}&bar=15m&limit=300`,'okx');candles=response.data.filter(row=>String(row[8])==='1'&&Number(row[0])+900000<=run.exchangeTime).map(row=>({time:Number(row[0]),open:Number(row[1]),high:Number(row[2]),low:Number(row[3]),close:Number(row[4]),volume:Number(row[5])})).sort((a,b)=>a.time-b.time);}
+ else{const raw=await remote(`/fapi/v1/klines?symbol=${encodeURIComponent(symbol)}&interval=15m&limit=301`);if(!Array.isArray(raw))throw Error('K 線格式無效');candles=raw.filter(row=>Number(row[6])<run.exchangeTime).map(row=>({time:Number(row[0]),open:Number(row[1]),high:Number(row[2]),low:Number(row[3]),close:Number(row[4]),volume:Number(row[5])}));}
  if(candles.some(c=>!Number.isFinite(c.time)||!Number.isFinite(c.close)||c.close<=0||!Number.isFinite(c.volume)||c.volume<0))throw Error('K 線數值無效');const result=evaluateCandles(symbol,candles,run.rules);return {result:result?{...result,provider,tradingViewSymbol:`${provider==='okx'?'OKX':'BINANCE'}:${symbol}.P`}:null};}catch(error){return {error:{symbol,message:String(error.message||error)}};} });
  const latest=await read(bucket,'scan/progress.json');if(latest?.runId!==run.runId||latest.offset!==run.offset)return json({error:'掃描位置已由其他請求更新'},409);
  for(const outcome of outcomes){if(outcome.error){run.failed++;run.errors.push(outcome.error);}else if(outcome.result)run.results.push(outcome.result);}run.completed+=batch.length;run.offset+=batch.length;run.updatedAt=new Date().toISOString();
