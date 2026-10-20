@@ -1,6 +1,6 @@
 export type HistoryAssetId='oil'|'btc'|'sp500'|'gold'|'nasdaq';
 export type HistoryPoint={date:string;value:number;open?:number;high?:number;low?:number};
-export type HistorySeries={id:string;label:string;currency:string;unit?:string;source:string;points:HistoryPoint[]};
+export type HistorySeries={id:string;label:string;currency:string;unit?:string;source:string;sourceUrl?:string;note?:string;points:HistoryPoint[]};
 export type HistoryEvent={id:string;date:string;title:string;region:string;description:string;sourceUrl:string};
 export type HistoryPayload={series:HistorySeries[];events?:HistoryEvent[];asOf?:string};
 export const historyAssets=[{id:'oil',label:'WTI 原油',color:'#ffbd69'},{id:'btc',label:'比特幣 BTC',color:'#65e3d4'},{id:'sp500',label:'標普 500',color:'#a5a0ff'},{id:'gold',label:'黃金',color:'#efda84'},{id:'nasdaq',label:'Nasdaq 綜合',color:'#75baff'}] as const;
