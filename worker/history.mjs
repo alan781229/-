@@ -44,7 +44,7 @@ async function historySeries(id,query,env){
  const config=HISTORY_ASSETS[id];const url=new URL(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(config.symbol)}`);
  url.searchParams.set('period1',String(query.period1));url.searchParams.set('period2',String(query.period2));url.searchParams.set('interval','1d');url.searchParams.set('events','history');
  let response;
- try{response=await fetch(url.toString(),{headers:{accept:'application/json'},signal:AbortSignal.timeout(15000),redirect:'error'});}catch(error){throw Error(error?.name==='TimeoutError'?'歷史行情供應商連線逾時。':'無法連線至歷史行情供應商。');}
+ try{response=await fetch(url.toString(),{headers:{accept:'application/json'},signal:AbortSignal.timeout(15000),redirect:'manual'});}catch(error){throw Error(error?.name==='TimeoutError'?'歷史行情供應商連線逾時。':`無法連線至歷史行情供應商（${String(error?.name||'Error')}: ${String(error?.message||'未知連線錯誤').replace(/[\r\n]/g,' ').slice(0,180)}）。`);}
  if(!response.ok)throw Error(`歷史行情供應商 HTTP ${response.status}，未切換示範資料。`);
  const declared=Number(response.headers.get('content-length'));if(Number.isFinite(declared)&&declared>6*1024*1024)throw Error('歷史行情回應超過大小上限。');
  const raw=await response.text();if(raw.length>6*1024*1024)throw Error('歷史行情回應超過大小上限。');
