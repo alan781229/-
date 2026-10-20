@@ -1,3 +1,5 @@
+import {authorizeRequest,handleAccountApi} from './rbac.mjs';
+import {handleHistoryApi} from './history.mjs';
 import {evaluateCandles,defaultRules,technicalConditionOptions} from '../src/lib/scanner.ts';
 const VERSION='tide-worker-3';
 const json=(data,status=200)=>new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store'}});
@@ -20,7 +22,7 @@ async function remote(path,provider='binance'){
 async function limitedMap(items,fn){const output=new Array(items.length);let index=0;await Promise.all(Array.from({length:Math.min(4,items.length)},async()=>{while(index<items.length){const current=index++;output[current]=await fn(items[current]);}}));return output;}
 
 function rulesFrom(value={}){const rules={...defaultRules,...value};if(!['strict','trend','pullback'].includes(rules.preset)||!['both','long','short'].includes(rules.direction)||!['ma','ema','slope'].every(k=>typeof rules[k]==='boolean')||!Number.isFinite(rules.volumeRatio)||rules.volumeRatio<0||rules.volumeRatio>20||(!rules.ma&&!rules.ema))throw Error('篩選條件無效');if(rules.conditions!==undefined&&(!Array.isArray(rules.conditions)||rules.conditions.length>technicalConditionOptions.length||rules.conditions.some(id=>!technicalConditionOptions.some(option=>option.id===id))))throw Error('技術條件無效');return rules;}
-export async function api(request,env){const path=new URL(request.url).pathname;if(path==='/api/health')return json({ok:true,storage:Boolean(env.BUCKET),version:VERSION});if(!path.startsWith('/api/scan/'))return json({error:'找不到 API'},404);if(!env.BUCKET)return json({error:'尚未綁定持久儲存 BUCKET'},503);if(request.method!=='GET'&&request.headers.get('origin')&&request.headers.get('origin')!==new URL(request.url).origin)return json({error:'來源不符'},403);
+export async function api(request,env,context={}){const path=new URL(request.url).pathname;const accountResponse=await handleAccountApi(request,env);if(accountResponse)return accountResponse;if(path==='/api/history'){const access=await authorizeRequest(request,env,'history');if(!access.allowed)return access.response;return handleHistoryApi(request,env);}if(path.startsWith('/api/scan/')){if(!context.privateService){const access=await authorizeRequest(request,env,'scan');if(!access.allowed)return access.response;}}if(path==='/api/health')return json({ok:true,storage:Boolean(env.BUCKET),version:VERSION});if(!path.startsWith('/api/scan/'))return json({error:'找不到 API'},404);if(!env.BUCKET)return json({error:'尚未綁定持久儲存 BUCKET'},503);if(request.method!=='GET'&&request.headers.get('origin')&&request.headers.get('origin')!==new URL(request.url).origin)return json({error:'來源不符'},403);
  const bucket=env.BUCKET;try{
  if(path==='/api/scan/status'&&request.method==='GET')return json({progress:await read(bucket,'scan/progress.json'),snapshot:await read(bucket,'scan/snapshot.json'),singleWriter:true});
  if(request.method!=='POST')return json({error:'方法不支援'},405);
@@ -59,6 +61,8 @@ export default {async fetch(request,env){if(new URL(request.url).pathname==='/mc
 function serveAsset(request){const path=decodeURIComponent(new URL(request.url).pathname);const key=path==='/'?'/index.html':path;const item=ASSETS[key]||ASSETS[`${key.replace(/\/$/,'')}.html`]||ASSETS[`${key.replace(/\/$/,'')}/index.html`];if(!item)return new Response('找不到頁面',{status:404});const bytes=Uint8Array.from(atob(item.data),c=>c.charCodeAt(0));return new Response(request.method==='HEAD'?null:bytes,{headers:{'content-type':item.mime,'cache-control':key.startsWith('/_next/')?'public,max-age=31536000,immutable':'no-cache'}});}
 
 const mcpTools=[
+ {name:'account_status',description:'Read the authenticated visitor own membership role. Service credentials do not confer a member identity.',inputSchema:{type:'object',properties:{},additionalProperties:false}},
+ {name:'history_compare',description:'Compare daily historical oil, BTC and S&P500 prices; dates YYYY-MM-DD. Paid visitor or owner-private service only.',inputSchema:{type:'object',properties:{assets:{type:'string'},start:{type:'string'},end:{type:'string'}},required:['start','end'],additionalProperties:false}},
  {name:'scan_status',description:'Read the persisted scan coverage, latest snapshot and current progress.',inputSchema:{type:'object',properties:{},additionalProperties:false}},
  {name:'scan_begin',description:'Begin a complete OKX or Binance USDT perpetual scan using closed 15-minute candles and default MA/EMA/volume rules. Owner-private Site only.',inputSchema:{type:'object',properties:{provider:{type:'string',enum:['okx','binance'],default:'okx'}},additionalProperties:false}},
  {name:'scan_step',description:'Process the next twelve symbols of a running full-market scan. Use the returned runId and offset until terminal.',inputSchema:{type:'object',properties:{runId:{type:'string'},offset:{type:'integer',minimum:0}},required:['runId','offset'],additionalProperties:false}}
@@ -71,9 +75,11 @@ async function mcp(request,env){
  else if(message.method==='notifications/initialized')return new Response(null,{status:202});
  else if(message.method==='tools/list')result={tools:mcpTools};
  else if(message.method==='tools/call'){
+ if(message.params?.name==='account_status'){const response=await handleAccountApi(new Request(new URL('/api/account',request.url),{headers:request.headers}),env);return json({jsonrpc:'2.0',id:message.id,result:{content:[{type:'text',text:JSON.stringify(await response.json())}],isError:!response.ok}});}
+ if(message.params?.name==='history_compare'){const a=message.params.arguments||{},url=new URL('/api/history',request.url);for(const key of ['assets','start','end'])if(typeof a[key]==='string')url.searchParams.set(key,a[key]);const service=!request.headers.get('oai-authenticated-user-id')&&env.TIDE_PRIVATE_SERVICE_SCAN==='owner-private'&&!request.headers.get('origin');const response=service?await handleHistoryApi(new Request(url),env):await api(new Request(url,{headers:request.headers}),env);return json({jsonrpc:'2.0',id:message.id,result:{content:[{type:'text',text:JSON.stringify(await response.json())}],isError:!response.ok}});}
  const action={scan_status:'status',scan_begin:'begin',scan_step:'step'}[message.params?.name];if(!action)return json({jsonrpc:'2.0',id:message.id,error:{code:-32601,message:'Unknown tool'}});
  const body=action==='begin'?{rules:defaultRules,provider:message.params.arguments?.provider||'okx'}:message.params.arguments||{};
- const response=await api(new Request(new URL('/api/scan/'+action,request.url),action==='status'?{}:{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)}),env);
+ const headers=new Headers(request.headers);headers.delete('content-length');headers.set('content-type','application/json');const privateService=!request.headers.get('oai-authenticated-user-id')&&env.TIDE_PRIVATE_SERVICE_SCAN==='owner-private'&&!request.headers.get('origin');const response=await api(new Request(new URL('/api/scan/'+action,request.url),action==='status'?{headers}:{method:'POST',headers,body:JSON.stringify(body)}),env,{privateService});
  result={content:[{type:'text',text:JSON.stringify(await response.json())}],isError:!response.ok};
  }else return json({jsonrpc:'2.0',id:message.id,error:{code:-32601,message:'Unsupported method'}});
  return json({jsonrpc:'2.0',id:message.id,result});

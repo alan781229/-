@@ -17,19 +17,31 @@ class SameSiteRedirect(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 def request_api(action, token, body=None):
-    request = urllib.request.Request(SITE + '/api/scan/' + action,
-        data=json.dumps(body).encode() if body is not None else None,
-        headers={'OAI-Sites-Authorization': 'Bearer ' + token, 'Content-Type': 'application/json'})
+    # Only the explicitly configured owner-private MCP service boundary allows
+    # unattended market-data access; it never conveys a visitor/admin identity.
+    packet = {'jsonrpc':'2.0', 'id':1, 'method':'tools/call',
+              'params':{'name':'scan_' + action, 'arguments':body or {}}}
+    if action == 'begin':
+        packet['params']['arguments'] = {'provider':(body or {}).get('provider', 'okx')}
+    request = urllib.request.Request(SITE + '/mcp', data=json.dumps(packet).encode(),
+        headers={'OAI-Sites-Authorization':'Bearer ' + token, 'Content-Type':'application/json'})
     opener = urllib.request.build_opener(SameSiteRedirect())
     try:
         with opener.open(request, timeout=90) as response:
-            return json.load(response)
+            result = json.load(response)
+        if result.get('error') or not isinstance(result.get('result'), dict):
+            raise RuntimeError('Site MCP request failed.')
+        content = result['result'].get('content', [])
+        text = next((item['text'] for item in content if item.get('type') == 'text'), None)
+        if text is None:
+            raise RuntimeError('Site MCP response is missing scanner data.')
+        payload = json.loads(text)
+        if result['result'].get('isError'):
+            if payload.get('progress'):
+                return payload['progress']
+            raise RuntimeError('Site scanner rejected the service request; check private service configuration.')
+        return payload
     except urllib.error.HTTPError as error:
-        # Never print request headers or token. A competing driver is recoverable.
-        if error.code == 409:
-            current = json.load(error)
-            if current.get('progress'):
-                return current['progress']
         raise RuntimeError(f'Site scanner HTTP {error.code}') from None
 
 def drive(call, deadline_seconds=840, now=time.time, sleep=time.sleep):

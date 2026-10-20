@@ -18,9 +18,20 @@ export function summarize(records: TradeRecord[]) {
   const avgWin=wins.length?winTotal/wins.length:0, avgLoss=losses.length?lossTotal/losses.length:0;
   return {count:records.length,net:winTotal-lossTotal,winRate:records.length?wins.length/records.length*100:0,avgWin,avgLoss,payoff:avgLoss?avgWin/avgLoss:null,profitFactor:lossTotal?winTotal/lossTotal:null,discipline:records.length?records.filter(r=>r.followedPlan).length/records.length*100:0};
 }
-const DB='tide-trading-journal';
-function openDB():Promise<IDBDatabase> { return new Promise((resolve,reject)=>{const q=indexedDB.open(DB,1); q.onupgradeneeded=()=>q.result.createObjectStore('trades',{keyPath:'id'});q.onsuccess=()=>resolve(q.result);q.onerror=()=>reject(q.error);}); }
-export async function readTrades():Promise<TradeRecord[]> { const db=await openDB();try{return await new Promise((resolve,reject)=>{const q=db.transaction('trades','readonly').objectStore('trades').getAll();q.onsuccess=()=>resolve(q.result);q.onerror=()=>reject(q.error);});}finally{db.close();} }
-export async function persistTrade(record:TradeRecord) {const db=await openDB();try{await new Promise<void>((resolve,reject)=>{const tx=db.transaction('trades','readwrite');tx.objectStore('trades').put(record);tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error);});}finally{db.close();}}
-export async function deleteTrade(id:string) {const db=await openDB();try{await new Promise<void>((resolve,reject)=>{const tx=db.transaction('trades','readwrite');tx.objectStore('trades').delete(id);tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error);});}finally{db.close();}}
+const LEGACY_DB='tide-trading-journal';
+/** Account separation in this browser only; never treat this namespace as authorization. */
+export function journalDatabaseName(userId='local-guest'){return `${LEGACY_DB}-account-${encodeURIComponent(userId)}`;}
+function openDB(name:string):Promise<IDBDatabase> { return new Promise((resolve,reject)=>{const q=indexedDB.open(name,1); q.onupgradeneeded=()=>q.result.createObjectStore('trades',{keyPath:'id'});q.onsuccess=()=>resolve(q.result);q.onerror=()=>reject(q.error);}); }
+async function readDatabase(name:string):Promise<TradeRecord[]> { const db=await openDB(name);try{return await new Promise((resolve,reject)=>{const q=db.transaction('trades','readonly').objectStore('trades').getAll();q.onsuccess=()=>resolve(q.result);q.onerror=()=>reject(q.error);});}finally{db.close();} }
+export async function readTrades(userId='local-guest'):Promise<TradeRecord[]> {return readDatabase(journalDatabaseName(userId));}
+export async function readLegacyTrades():Promise<TradeRecord[]> {return readDatabase(LEGACY_DB);}
+export async function persistTrade(record:TradeRecord,userId='local-guest') {const db=await openDB(journalDatabaseName(userId));try{await new Promise<void>((resolve,reject)=>{const tx=db.transaction('trades','readwrite');tx.objectStore('trades').put(record);tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error);});}finally{db.close();}}
+export async function deleteTrade(id:string,userId='local-guest') {const db=await openDB(journalDatabaseName(userId));try{await new Promise<void>((resolve,reject)=>{const tx=db.transaction('trades','readwrite');tx.objectStore('trades').delete(id);tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error);});}finally{db.close();}}
+/** Explicitly confirmed migration copies original browser data without deleting it. */
+export async function importLegacyTrades(records:TradeRecord[],userId:string):Promise<TradeRecord[]> {
+ if(!userId||userId==='local-guest')throw new Error('請登入後再匯入舊版紀錄。');
+ const db=await openDB(journalDatabaseName(userId));
+ try{await new Promise<void>((resolve,reject)=>{const tx=db.transaction('trades','readwrite'),store=tx.objectStore('trades');for(const record of records){const copy={...record,id:`legacy:${record.id}`};const q=store.get(copy.id);q.onsuccess=()=>{if(!q.result)store.put(copy);};}tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error);});}finally{db.close();}
+ return readTrades(userId);
+}
 export function demoTrades():TradeRecord[] {return Array.from({length:6},(_,i)=>({id:`demo-${i}`,symbol:i%2?'BTCUSDT':'ETHUSDT',side:i%2?'short':'long',openedAt:`2026-10-${String(6+i).padStart(2,'0')}T01:00:00.000Z`,closedAt:`2026-10-${String(6+i).padStart(2,'0')}T05:00:00.000Z`,entry:2500,exit:i%3?2540:2480,quantity:1,leverage:5,fees:2,funding:0,principal:500,judgment:'示範：均線回測後確認量能',entryReason:'示範：回測支撐',exitReason:'示範：依計劃停利／停損',strategy:'均線回測',followedPlan:i!==2,demo:true}));}

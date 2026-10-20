@@ -7,9 +7,10 @@ const assets={};
 async function walk(directory){for(const entry of await fs.readdir(directory,{withFileTypes:true})){const absolute=path.join(directory,entry.name);if(entry.isDirectory())await walk(absolute);else{const key='/'+path.relative(path.join(root,'out'),absolute).split(path.sep).join('/');assets[key]={mime:mime[path.extname(absolute)]||'application/octet-stream',data:(await fs.readFile(absolute)).toString('base64')};}}}
 await walk(path.join(root,'out'));
 const scanner=ts.transpileModule(await fs.readFile(path.join(root,'src/lib/scanner.ts'),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ES2022}}).outputText.replace(/^export /gm,'');
-const worker=(await fs.readFile(path.join(root,'worker/index.mjs'),'utf8')).replace(/^import .*scanner.ts.*\n/,'');
+const worker=(await fs.readFile(path.join(root,'worker/index.mjs'),'utf8')).replace(/^import .*\n/gm,'');
+const serverModules=(await Promise.all(['rbac','history'].map(name=>fs.readFile(path.join(root,`worker/${name}.mjs`),'utf8')))).map(source=>source.replace(/^export /gm,'')).join('\n');
 await fs.mkdir(path.join(root,'dist/server'),{recursive:true});
-await fs.writeFile(path.join(root,'dist/server/index.js'),`const ASSETS=${JSON.stringify(assets)};\n${scanner}\n${worker}`);
+await fs.writeFile(path.join(root,'dist/server/index.js'),`const ASSETS=${JSON.stringify(assets)};\n${scanner}\n${serverModules}\n${worker}`);
 console.log(`Worker packaged ${Object.keys(assets).length} assets`);
 
 await fs.mkdir(path.join(root,'dist/.openai'),{recursive:true});

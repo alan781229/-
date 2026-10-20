@@ -3,10 +3,12 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import ts from 'typescript';
 const scanner=ts.transpileModule(await fs.readFile(new URL('../src/lib/scanner.ts',import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ES2022}}).outputText.replace(/^export /gm,'');
-const source=(await fs.readFile(new URL('../worker/index.mjs',import.meta.url),'utf8')).replace(/^import .*scanner.ts.*\n/,'');
+const source=(await fs.readFile(new URL('../worker/index.mjs',import.meta.url),'utf8')).replace(/^import .*\n/gm,'');
 // API fixtures use a zero-delay clock; production pause and Retry-After values remain intact.
 const fixtureSource=source.replace('const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));','const pause=async ms=>{};');
-const {api}=await import('data:text/javascript;base64,'+Buffer.from(scanner+'\n'+fixtureSource).toString('base64'));
+const rbac=(await fs.readFile(new URL('../worker/rbac.mjs',import.meta.url),'utf8')).replace(/^export /gm,'');const history=(await fs.readFile(new URL('../worker/history.mjs',import.meta.url),'utf8')).replace(/^export /gm,'');
+const {api:rawApi}=await import('data:text/javascript;base64,'+Buffer.from(scanner+'\n'+rbac+'\n'+history+'\n'+fixtureSource).toString('base64'));
+const api=(request,env)=>{const headers=new Headers(request.headers);headers.set('oai-authenticated-user-id','test-admin');headers.set('oai-authenticated-user-email','admin@example.test');return rawApi(new Request(request,{headers}),{...env,TIDE_ADMIN_EMAIL:'admin@example.test'});};
 const bucket=()=>{const store=new Map();return {async get(key){return store.has(key)?{json:async()=>JSON.parse(store.get(key))}:null;},async put(key,value){store.set(key,value);}};};
 const request=(path,body,origin)=>new Request('https://private.example'+path,body?{method:'POST',headers:{'content-type':'application/json',...(origin?{origin}:{})},body:JSON.stringify(body)}:{});
 test('health and storage errors are explicit',async()=>{assert.equal((await (await api(request('/api/health'),{})).json()).storage,false);assert.equal((await api(request('/api/scan/status'),{})).status,503);});

@@ -1,19 +1,20 @@
 'use client';
 import {useEffect,useState,useRef} from 'react';
-import {TradeRecord,readTrades,persistTrade,deleteTrade,netProfit,grossProfit,returnPercent,periodKey,summarize,demoTrades} from '@/lib/journal';
+import {TradeRecord,readLegacyTrades,importLegacyTrades,readTrades,persistTrade,deleteTrade,netProfit,grossProfit,returnPercent,periodKey,summarize,demoTrades} from '@/lib/journal';
 import {parseTradeScreenshot,recognizeTradeImage,type OcrTrade} from '@/lib/trade-ocr';
 import './journal.css';
 const money=(n:number)=>n.toLocaleString('zh-TW',{maximumFractionDigits:2});
 function Screenshot({blob}:{blob:Blob}) {const [url,setUrl]=useState('');useEffect(()=>{const u=URL.createObjectURL(blob);setUrl(u);return()=>URL.revokeObjectURL(u);},[blob]);return <a href={url} target="_blank" rel="noreferrer"><img src={url} alt="交易紀錄截圖" /></a>;}
-export function TradingJournal({onChart}:{onChart?:(symbol:string)=>void}) {
+export function TradingJournal({onChart,userId='local-guest'}:{userId?:string;onChart?:(symbol:string)=>void}) {
  const [records,setRecords]=useState<TradeRecord[]>([]),[error,setError]=useState(''),[ready,setReady]=useState(false),[busy,setBusy]=useState(false),[mode,setMode]=useState<'real'|'demo'>('real'),[period,setPeriod]=useState<'week'|'month'>('week'),[pendingDelete,setPendingDelete]=useState<string|null>(null),[file,setFile]=useState<File|null>(null);
+ const [legacyPreview,setLegacyPreview]=useState<TradeRecord[]|null>(null);
  const formRef=useRef<HTMLFormElement>(null),ocrVersion=useRef(0);
  const [ocr,setOcr]=useState<OcrTrade|null>(null),[ocrText,setOcrText]=useState(''),[ocrBusy,setOcrBusy]=useState(false),[ocrProgress,setOcrProgress]=useState(0),[ocrError,setOcrError]=useState('');
  function chooseImage(image:File|null){ocrVersion.current++;setFile(image);setOcr(null);setOcrText('');setOcrError('');setOcrBusy(false);}
  async function scanImage(){if(!file)return;const version=++ocrVersion.current;setOcrBusy(true);setOcrError('');setOcrProgress(0);try{const text=await recognizeTradeImage(file,p=>{if(version===ocrVersion.current)setOcrProgress(Math.round(p*100));});if(version!==ocrVersion.current)return;setOcrText(text);setOcr(parseTradeScreenshot(text));}catch{if(version===ocrVersion.current)setOcrError('圖片辨識失敗。首次使用需要下載辨識引擎與語言資料，請確認網路連線後重試，或手動輸入。');}finally{if(version===ocrVersion.current)setOcrBusy(false);}}
  function applyOcr(){if(!ocr||!formRef.current)return;for(const [key,value] of Object.entries(ocr.fields)){const input=formRef.current.elements.namedItem(key);if(input instanceof HTMLInputElement||input instanceof HTMLSelectElement)input.value=value;}setOcr(null);}
  function pasteImage(event:React.ClipboardEvent){const item=Array.from(event.clipboardData.items).find(item=>item.kind==='file'&&item.type.startsWith('image/'));const image=item?.getAsFile();if(image){event.preventDefault();chooseImage(image);}}
- useEffect(()=>{readTrades().then(setRecords).catch(()=>setError('無法讀取瀏覽器儲存空間；請確認瀏覽器允許 IndexedDB。')).finally(()=>setReady(true));},[]);
+ useEffect(()=>{let active=true;setRecords([]);setReady(false);setLegacyPreview(null);readTrades(userId).then(rows=>{if(active)setRecords(rows);}).catch(()=>{if(active)setError('無法讀取瀏覽器儲存空間；請確認瀏覽器允許 IndexedDB。');}).finally(()=>{if(active)setReady(true);});return()=>{active=false;};},[userId]);
  const visible=records.filter(r=>r.demo===(mode==='demo')).sort((a,b)=>b.closedAt.localeCompare(a.closedAt));
  const groups=Array.from(new Set(visible.map(r=>periodKey(r.closedAt,period)))).sort().reverse();
  async function save(event:React.FormEvent<HTMLFormElement>) {event.preventDefault();setError('');const form=event.currentTarget,data=new FormData(form);try{
@@ -24,13 +25,17 @@ export function TradingJournal({onChart}:{onChart?:(symbol:string)=>void}) {
  const r:TradeRecord={id:crypto.randomUUID(),symbol:String(data.get('symbol')).trim().toUpperCase(),side:data.get('side')==='short'?'short':'long',openedAt,closedAt,entry:num('entry'),exit:num('exit'),quantity:num('quantity'),leverage:num('leverage'),fees:num('fees'),funding:num('funding'),principal:data.get('principal')?num('principal'):undefined,judgment:String(data.get('judgment')),entryReason:String(data.get('entryReason')),exitReason:String(data.get('exitReason')),strategy:String(data.get('strategy')),followedPlan:data.get('followedPlan')==='on',screenshot:file??undefined,demo:false};
  if(!/^[A-Z0-9:._/-]{1,30}$/.test(r.symbol))throw Error('商品代號限英數字與 : . _ / -，最多 30 字。');
  if(![r.entry,r.exit,r.quantity,r.leverage].every(n=>Number.isFinite(n)&&n>0)||!Number.isFinite(r.fees)||r.fees<0||!Number.isFinite(r.funding)||(r.principal!==undefined&&(!Number.isFinite(r.principal)||r.principal<=0)))throw Error('請填入有效價格、数量與費用；本金須大於零。');
- setBusy(true);await persistTrade(r);setRecords(prev=>[r,...prev]);setMode('real');form.reset();chooseImage(null);
+ setBusy(true);await persistTrade(r,userId);setRecords(prev=>[r,...prev]);setMode('real');form.reset();chooseImage(null);
  }catch(e){setError(e instanceof Error?e.message:'儲存失敗；可能儲存空間不足。');}finally{setBusy(false);}}
- async function loadDemo(){try{setBusy(true);const demo=demoTrades();for(const r of demo)await persistTrade(r);setRecords(prev=>[...prev.filter(r=>!r.demo),...demo]);setMode('demo');}catch{setError('示範資料儲存失敗。');}finally{setBusy(false);}}
+ async function loadDemo(){try{setBusy(true);const demo=demoTrades();for(const r of demo)await persistTrade(r,userId);setRecords(prev=>[...prev.filter(r=>!r.demo),...demo]);setMode('demo');}catch{setError('示範資料儲存失敗。');}finally{setBusy(false);}}
+ async function previewLegacy(){setBusy(true);setError('');try{setLegacyPreview(await readLegacyTrades());}catch{setError('無法讀取舊版瀏覽器紀錄。');}finally{setBusy(false);}}
+ async function confirmLegacy(){if(!legacyPreview)return;setBusy(true);setError('');try{setRecords(await importLegacyTrades(legacyPreview,userId));setLegacyPreview(null);}catch{setError('匯入失敗，請重試；舊版資料仍保留。');}finally{setBusy(false);}}
  async function backup(){try{const exported=await Promise.all(visible.map(async r=>({...r,screenshot:r.screenshot?await new Promise<string>((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result));reader.onerror=()=>reject(reader.error);reader.readAsDataURL(r.screenshot!);}):undefined})));const url=URL.createObjectURL(new Blob([JSON.stringify({version:1,timezone:'Asia/Taipei',mode,records:exported},null,2)],{type:'application/json'}));const a=document.createElement('a');a.href=url;a.download=`交易備份-${mode}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}catch{setError('備份失敗，請重試。');}}
- async function remove(){if(!pendingDelete)return;try{await deleteTrade(pendingDelete);setRecords(prev=>prev.filter(r=>r.id!==pendingDelete));setPendingDelete(null);}catch{setError('刪除失敗，請重試。');}}
+ async function remove(){if(!pendingDelete)return;try{await deleteTrade(pendingDelete,userId);setRecords(prev=>prev.filter(r=>r.id!==pendingDelete));setPendingDelete(null);}catch{setError('刪除失敗，請重試。');}}
  return <section className="journal" id="journal"><div className="journal-heading"><div><span className="journal-kicker">PERSONAL TRADE LAB</span><h2>個人交易紀錄中心</h2><p>截圖＋交易判斷，回顧每一次決策。時間一律為台北時間（UTC+8）。</p></div><button onClick={backup} disabled={!visible.length}>下載目前資料備份</button></div>
- <p className="journal-notice">紀錄與截圖只保存在此瀏覽器，尚未同步會員帳戶。清除網站資料會刪除紀錄，請定期備份。圖片辨識在此瀏覽器處理，不上傳截圖；首次使用會下載 OCR 引擎與中英文語言資料。辨識後請核對欄位再儲存。所有統計以 USDT 計價。</p>
+ <p className="journal-notice">紀錄與截圖只保存在此瀏覽器，依目前登入帳號分開顯示，尚未同步雲端。此為瀏覽器資料分區；共用此瀏覽器的人仍可透過開發者工具存取本機資料，並非伺服器存取權限保護。清除網站資料會刪除紀錄，請定期備份。圖片辨識在此瀏覽器處理，不上傳截圖；首次使用會下載 OCR 引擎與中英文語言資料。辨識後請核對欄位再儲存。所有統計以 USDT 計價。</p>
+ {userId!=='local-guest'&&<div className="journal-controls"><button onClick={previewLegacy} disabled={busy||!ready}>檢查並匯入舊版瀏覽器紀錄</button></div>}
+ {legacyPreview&&<div className="journal-confirm" role="alert">舊版共有 {legacyPreview.length} 筆（個人 {legacyPreview.filter(r=>!r.demo).length} 筆、示範 {legacyPreview.filter(r=>r.demo).length} 筆）。舊版資料未標示所屬帳號，請確認屬於你，再複製到目前帳號；原資料會保留，重複匯入不覆蓋現有紀錄。<button onClick={confirmLegacy} disabled={busy||!legacyPreview.length}>確認匯入 {legacyPreview.length} 筆</button><button onClick={()=>setLegacyPreview(null)} disabled={busy}>取消匯入</button></div>}
  {error&&<p role="alert" className="journal-error">{error}</p>}
  <form ref={formRef} onSubmit={save} onPaste={pasteImage} className="journal-form"><h3>新增已平倉交易</h3><div className="journal-fields">
  <label>商品代號<input name="symbol" placeholder="ETHUSDT" required maxLength={30}/></label><label>方向<select name="side"><option value="long">做多 LONG</option><option value="short">做空 SHORT</option></select></label>

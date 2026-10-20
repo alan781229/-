@@ -9,7 +9,7 @@
     "typecheck": "tsc --noEmit",
     "test:e2e": "playwright test",
     "build:hosted": "npm run build && node scripts/build-hosted.mjs",
-    "test:worker": "node --test tests/worker.unit.test.mjs"
+    "test:worker": "node --test tests/*.unit.test.mjs"
   },
   "dependencies": {
     "lucide-react": "^0.468.0",
